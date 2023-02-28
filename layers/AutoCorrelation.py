@@ -8,6 +8,7 @@ from math import sqrt
 import os
 
 
+# attention. can be taken as is
 class AutoCorrelation(nn.Module):
     """
     AutoCorrelation Mechanism with the following two phases:
