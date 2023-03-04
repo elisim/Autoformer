@@ -1,11 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
 import math
-from math import sqrt
-import os
 
 
 # attention. can be taken as is
@@ -29,6 +24,8 @@ class AutoCorrelation(nn.Module):
         SpeedUp version of Autocorrelation (a batch-normalization style design)
         This is for the training phase.
         """
+        # corr size: torch.Size([32, 8, 64, 96])
+        # B H C L
         head = values.shape[1]
         channel = values.shape[2]
         length = values.shape[3]
@@ -43,9 +40,11 @@ class AutoCorrelation(nn.Module):
         tmp_values = values
         delays_agg = torch.zeros_like(values).float()
         for i in range(top_k):
-            pattern = torch.roll(tmp_values, -int(index[i]), -1)
-            delays_agg = delays_agg + pattern * \
-                         (tmp_corr[:, i].unsqueeze(1).unsqueeze(1).unsqueeze(1).repeat(1, head, channel, length))
+            pattern = torch.roll(tmp_values, -int(index[i]), -1) # torch.Size([32, 8, 64, 96])
+            corr_at_delay = tmp_corr[:, i]
+            corr_at_delay = corr_at_delay.unsqueeze(1).unsqueeze(1).unsqueeze(1).repeat(1, head, channel, length) # torch.Size([32, 8, 64, 96])
+            delays_agg = delays_agg + pattern * corr_at_delay
+
         return delays_agg
 
     def time_delay_agg_inference(self, values, corr):
@@ -113,10 +112,20 @@ class AutoCorrelation(nn.Module):
             keys = keys[:, :L, :, :]
 
         # period-based dependencies
-        q_fft = torch.fft.rfft(queries.permute(0, 2, 3, 1).contiguous(), dim=-1)
-        k_fft = torch.fft.rfft(keys.permute(0, 2, 3, 1).contiguous(), dim=-1)
-        res = q_fft * torch.conj(k_fft)
-        corr = torch.fft.irfft(res, dim=-1)
+
+        # q_hf size = B L H E
+        # k_hf size = B L H E
+        # attn_weights = B L H E (B*H, L, E)
+
+        q_hf = queries.permute(0, 2, 3, 1).contiguous()  # torch.Size([32, 96, 8, 64]) -> torch.Size([32, 8, 64, 96])
+        q_fft = torch.fft.rfft(q_hf, dim=-1)  # torch.Size([32, 8, 64, 49])
+        k_hf = keys.permute(0, 2, 3, 1).contiguous()  # torch.Size([32, 96, 8, 64]) -> torch.Size([32, 8, 64, 96])
+        k_fft = torch.fft.rfft(k_hf, dim=-1)  # torch.Size([32, 8, 64, 49])
+        res = q_fft * torch.conj(k_fft)  # torch.Size([32, 8, 64, 49]) = torch.Size([32, 8, 64, 49]) x torch.Size([32, 8, 64, 49])
+        corr = torch.fft.irfft(res, dim=-1)  # torch.Size([32, 8, 64, 96])
+
+        # after permute:
+        # corr.permute(0, 3, 1, 2) = torch.Size([32, 96, 8, 64])
 
         # time delay agg
         if self.training:
